@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>SBS Shiksha Niketan – Marksheet System</title>
+  <meta name="theme-color" content="#1a237e" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    :root {
+      --primary: #1a237e;
+      --accent: #c62828;
+      --gold: #f9a825;
+      --bg: #f0f2f5;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: 'DM Sans', sans-serif; background: var(--bg); margin: 0; padding: 0; }
+    .playfair { font-family: 'Playfair Display', serif; }
+
+    .glass-card { background: rgba(255,255,255,0.97); border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+    .btn-primary { background: var(--primary); color: white; border: none; border-radius: 10px; padding: 10px 20px; font-weight: 600; cursor: pointer; transition: all 0.2s; font-family: 'DM Sans', sans-serif; }
+    .btn-primary:hover { background: #0d1b6e; transform: translateY(-1px); }
+    .inp { width: 100%; padding: 9px 13px; border: 1.5px solid #e0e0e0; border-radius: 9px; font-size: 13px; font-family: 'DM Sans', sans-serif; outline: none; transition: border 0.2s; background: #fafafa; }
+    .inp:focus { border-color: var(--primary); background: #fff; }
+    .marks-inp { width: 100%; padding: 5px 3px; border: 1px solid #ddd; border-radius: 5px; font-size: 11px; text-align: center; outline: none; font-family: 'DM Sans', sans-serif; }
+    .marks-inp:focus { border-color: #1a237e; background: #e8eaf6; }
+
+    /* Sync indicator */
+    .sync-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+    .sync-dot.synced { background: #4caf50; }
+    .sync-dot.syncing { background: #ff9800; animation: pulse 1s infinite; }
+    .sync-dot.error { background: #f44336; }
+    .sync-dot.offline { background: #9e9e9e; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* Print */
+    @media print {
+      body * { visibility: hidden !important; }
+      #PRINT_AREA, #PRINT_AREA * { visibility: visible !important; }
+      #PRINT_AREA {
+        position: fixed !important; left: 0 !important; top: 0 !important;
+        width: 210mm !important; min-height: 297mm !important;
+        margin: 0 !important; padding: 0 !important;
+        box-shadow: none !important; background: white !important;
+      }
+      @page { size: A4 portrait; margin: 0; }
+    }
+
+    @keyframes fadeIn { from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)} }
+    .fade-in { animation: fadeIn 0.25s ease; }
+
+    .toast { position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:#323232; color:white; padding:11px 22px; border-radius:24px; font-size:13px; z-index:9999; font-family:'DM Sans',sans-serif; box-shadow:0 4px 20px rgba(0,0,0,0.3); white-space:nowrap; }
+
+    ::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-thumb { background:#9fa8da; border-radius:10px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// ==================== FIREBASE INIT ====================
+const firebaseConfig = {
+  apiKey: "AIzaSyDw6lVRfXgehqpgvTCobqZZyLAy9alzAU8",
+  authDomain: "sbs-marksheet.firebaseapp.com",
+  projectId: "sbs-marksheet",
+  storageBucket: "sbs-marksheet.firebasestorage.app",
+  messagingSenderId: "1064566048496",
+  appId: "1:1064566048496:web:0b7cf5d4b9fa0bf9dae435"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+db.settings({ cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED });
+db.enablePersistence({ synchronizeTabs: true }).catch(err => console.log('Persistence:', err));
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ==================== CONSTANTS ====================
+const DEFAULT_SUBJECTS = ["HINDI","ENGLISH","MATHEMATICS","SCIENCE","SOCIAL SCIENCE","SANSKRIT","COMPUTER","G.K."];
+const GRADE_SCALE = [
+  {min:91,max:100,grade:"A1",label:"OUTSTANDING"},
+  {min:81,max:90, grade:"A2",label:"EXCELLENT"},
+  {min:71,max:80, grade:"B1",label:"VERY GOOD"},
+  {min:61,max:70, grade:"B2",label:"GOOD"},
+  {min:51,max:60, grade:"C1",label:"AVERAGE"},
+  {min:41,max:50, grade:"C2",label:"SATISFACTORY"},
+  {min:33,max:40, grade:"D", label:"PASS"},
+  {min:0, max:32, grade:"E", label:"FAIL"},
+];
+function getGrade(pct) {
+  if(pct===null||isNaN(pct)) return "-";
+  for(const g of GRADE_SCALE) if(pct>=g.min&&pct<=g.max) return g.grade;
+  return "-";
+}
+function getGradeLabel(pct) {
+  if(pct===null||isNaN(pct)) return "-";
+  for(const g of GRADE_SCALE) if(pct>=g.min&&pct<=g.max) return g.label;
+  return "-";
+}
+
+// ==================== CALCULATIONS ====================
+function calcSubTotal(sub){ return (parseFloat(sub.obt1)||0)+(parseFloat(sub.obt2)||0)+(parseFloat(sub.obt3)||0); }
+function calcSubMM(sub){ return (parseFloat(sub.mm1)||0)+(parseFloat(sub.mm2)||0)+(parseFloat(sub.mm3)||0); }
+function calcGT(subjects){
+  return subjects.reduce((a,s)=>{
+    a.mm1+=parseFloat(s.mm1)||0; a.obt1+=parseFloat(s.obt1)||0;
+    a.mm2+=parseFloat(s.mm2)||0; a.obt2+=parseFloat(s.obt2)||0;
+    a.mm3+=parseFloat(s.mm3)||0; a.obt3+=parseFloat(s.obt3)||0;
+    a.mmG+=calcSubMM(s); a.obtG+=calcSubTotal(s); return a;
+  },{mm1:0,obt1:0,mm2:0,obt2:0,mm3:0,obt3:0,mmG:0,obtG:0});
+}
+function calcPct(obt,mm){ if(!mm) return null; return parseFloat(((obt/mm)*100).toFixed(1)); }
+
+// ==================== FIREBASE SYNC ====================
+const COL = "students";
+const BACKUP_COL = "backups";
+
+async function fbSaveStudent(student) {
+  // Save current version
+  await db.collection(COL).doc(String(student.id)).set(student);
+  // Save backup (keep last 2 versions)
+  const backupRef = db.collection(BACKUP_COL).doc(String(student.id));
+  const existing = await backupRef.get();
+  let versions = existing.exists ? (existing.data().versions || []) : [];
+  versions.unshift({ ...student, _savedAt: new Date().toISOString() });
+  if(versions.length > 2) versions = versions.slice(0, 2);
+  await backupRef.set({ versions });
+}
+
+async function fbLoadAllStudents() {
+  const snap = await db.collection(COL).get();
+  return snap.docs.map(d => d.data());
+}
+
+async function fbDeleteStudent(id) {
+  await db.collection(COL).doc(String(id)).delete();
+}
+
+async function fbLoadBackups(id) {
+  const doc = await db.collection(BACKUP_COL).doc(String(id)).get();
+  if(!doc.exists) return [];
+  return doc.data().versions || [];
+}
+
+// ==================== LOCAL STORAGE FALLBACK ====================
+const LS_KEY = "sbs_v3";
+function lsSave(students){ try{ localStorage.setItem(LS_KEY, JSON.stringify(students)); }catch{} }
+function lsLoad(){ try{ const r=localStorage.getItem(LS_KEY); return r?JSON.parse(r):[]; }catch{ return []; } }
+
+// ==================== NEW STUDENT TEMPLATE ====================
+function newStudent(){
+  return {
+    id: Date.now()+"_"+Math.floor(Math.random()*9999),
+    name:"", father:"", mother:"", address:"",
+    roll:"", admission:"", dob:"", cls:"", section:"", session:"2025-26",
+    photo: null,
+    attendance:{ present:"", total:"" },
+    remarks:"", rank:"", result:"",
+    subjects: DEFAULT_SUBJECTS.map(n=>({name:n,mm1:50,obt1:"",mm2:50,obt2:"",mm3:50,obt3:""})),
+    coScholastic:{ sports:"", art:"", music:"", discipline:"", cleanliness:"" },
+    _createdAt: new Date().toISOString(),
+    _updatedAt: new Date().toISOString(),
+  };
+}
+
+// ==================== ICONS ====================
+const Ic = {
+  back: <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
+  add:  <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>,
+  save: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+  print:<svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>,
+  trash:<svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>,
+  search:<svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+  upload:<svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>,
+  cloud:<svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>,
+  history:<svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></svg>,
+};
+
+// ==================== TOAST ====================
+function Toast({msg}){ return msg?<div className="toast">{msg}</div>:null; }
+
+// ==================== SYNC STATUS BAR ====================
+function SyncBar({status, lastSync}){
+  const colors = { synced:'#4caf50', syncing:'#ff9800', error:'#f44336', offline:'#9e9e9e', idle:'#9e9e9e' };
+  const labels = { synced:'Synced to Firebase', syncing:'Saving...', error:'Sync failed (saved locally)', offline:'Offline – saved locally', idle:'Ready' };
+  return (
+    <div style={{background:'#f8f9ff',borderBottom:'1px solid #e8eaf6',padding:'4px 14px',display:'flex',alignItems:'center',fontSize:11,color:'#555',gap:6}}>
+      <span className={`sync-dot ${status}`} style={{background:colors[status]||'#9e9e9e'}}></span>
+      <span>{labels[status]||'Ready'}</span>
+      {lastSync && status==='synced' && <span style={{marginLeft:'auto',color:'#aaa'}}>{lastSync}</span>}
+    </div>
+  );
+}
+
+// ==================== DASHBOARD ====================
+function Dashboard({ students, onNew, onSelect, syncStatus, lastSync }){
+  const [search, setSearch] = useState("");
+  const filtered = students.filter(s =>
+    (s.name||"").toLowerCase().includes(search.toLowerCase()) ||
+    (s.roll||"").includes(search) ||
+    (s.cls||"").toLowerCase().includes(search.toLowerCase())
+  );
+  const total = students.length;
+  const passed = students.filter(s=>{ const g=calcGT(s.subjects); return g.mmG>0&&calcPct(g.obtG,g.mmG)>=33; }).length;
+  const classes = [...new Set(students.map(s=>s.cls).filter(Boolean))].length;
+
+  return (
+    <div className="fade-in">
+      <SyncBar status={syncStatus} lastSync={lastSync} />
+      <div className="p-4 pb-24">
+        {/* Header */}
+        <div className="glass-card p-5 mb-4 text-center" style={{background:'linear-gradient(135deg,#0d1b6e,#1a237e,#283593)'}}>
+          <div style={{fontSize:11,letterSpacing:3,color:'rgba(255,255,255,0.7)',fontWeight:600,marginBottom:4}}>SCHOOL MANAGEMENT SYSTEM</div>
+          <div className="playfair" style={{fontSize:22,fontWeight:800,color:'white',lineHeight:1.2}}>SBS SHIKSHA NIKETAN</div>
+          <div style={{fontSize:11,color:'#90caf9',marginTop:3}}>Karaspur Prithvipur, Ghazipur (U.P.)</div>
+          <div style={{marginTop:10,display:'flex',justifyContent:'center',gap:16}}>
+            <div style={{background:'rgba(255,255,255,0.12)',borderRadius:10,padding:'8px 18px',textAlign:'center'}}>
+              <div style={{fontSize:24,fontWeight:800,color:'white'}}>{total}</div>
+              <div style={{fontSize:10,color:'#90caf9'}}>Students</div>
+            </div>
+            <div style={{background:'rgba(255,255,255,0.12)',borderRadius:10,padding:'8px 18px',textAlign:'center'}}>
+              <div style={{fontSize:24,fontWeight:800,color:'#a5d6a7'}}>{passed}</div>
+              <div style={{fontSize:10,color:'#90caf9'}}>Passed</div>
+            </div>
+            <div style={{background:'rgba(255,255,255,0.12)',borderRadius:10,padding:'8px 18px',textAlign:'center'}}>
+              <div style={{fontSize:24,fontWeight:800,color:'#ffcc80'}}>{classes}</div>
+              <div style={{fontSize:10,color:'#90caf9'}}>Classes</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Search + Add */}
+        <div style={{display:'flex',gap:10,marginBottom:16}}>
+          <div style={{flex:1,position:'relative'}}>
+            <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'#aaa'}}>{Ic.search}</span>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, class, roll no..." className="inp" style={{paddingLeft:34}} />
+          </div>
+          <button onClick={onNew} className="btn-primary" style={{display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
+            {Ic.add} New
+          </button>
+        </div>
+
+        {/* List */}
+        {filtered.length===0 ? (
+          <div className="glass-card" style={{padding:40,textAlign:'center'}}>
+            <div style={{fontSize:48,marginBottom:10}}>📋</div>
+            <div style={{color:'#666',fontWeight:600}}>No students found</div>
+            <div style={{color:'#aaa',fontSize:13,marginTop:4}}>Tap "New" to add a student</div>
+          </div>
+        ) : (
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {filtered.map(s=>{
+              const gt=calcGT(s.subjects);
+              const pct=gt.mmG>0?calcPct(gt.obtG,gt.mmG):null;
+              const pass=pct!==null&&pct>=33;
+              return (
+                <div key={s.id} onClick={()=>onSelect(s.id)} className="glass-card"
+                  style={{padding:'12px 14px',display:'flex',alignItems:'center',gap:12,cursor:'pointer',transition:'box-shadow 0.2s'}}
+                  onMouseOver={e=>e.currentTarget.style.boxShadow='0 6px 24px rgba(0,0,0,0.13)'}
+                  onMouseOut={e=>e.currentTarget.style.boxShadow=''}>
+                  <div style={{width:46,height:46,borderRadius:12,overflow:'hidden',background:'#e8eaf6',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    {s.photo ? <img src={s.photo} style={{width:'100%',height:'100%',objectFit:'cover'}} /> : <span style={{fontSize:22}}>👤</span>}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:700,color:'#1a1a2e',fontSize:14,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name||"Unnamed Student"}</div>
+                    <div style={{fontSize:11,color:'#888',marginTop:2}}>
+                      Class <b>{s.cls||"?"}{s.section?'-'+s.section:''}</b>
+                      {s.roll&&<> · Roll <b>{s.roll}</b></>}
+                      {s.session&&<> · {s.session}</>}
+                    </div>
+                  </div>
+                  <div style={{textAlign:'right',flexShrink:0}}>
+                    {pct!==null&&<>
+                      <div style={{fontWeight:800,fontSize:15,color:pass?'#2e7d32':'#c62828'}}>{pct}%</div>
+                      <span style={{background:pass?'#e8f5e9':'#ffebee',color:pass?'#2e7d32':'#c62828',padding:'1px 8px',borderRadius:20,fontSize:11,fontWeight:700}}>{getGrade(pct)}</span>
+                    </>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ==================== STUDENT EDITOR ====================
+function StudentEditor({ student, onSave, onBack, onPreview, onDelete, onRestore, toast }){
+  const [s, setS] = useState(()=>JSON.parse(JSON.stringify(student)));
+  const [backups, setBackups] = useState([]);
+  const [showBackups, setShowBackups] = useState(false);
+  const photoRef = useRef();
+  const saveTimer = useRef();
+
+  // Auto-save after 1.5s of no changes
+  useEffect(()=>{
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(()=>{ onSave(s); }, 1500);
+    return ()=>clearTimeout(saveTimer.current);
+  }, [s]);
+
+  const upd = (f,v) => setS(p=>({...p,[f]:v,_updatedAt:new Date().toISOString()}));
+  const updSub = (i,f,v) => {
+    const subs=[...s.subjects]; subs[i]={...subs[i],[f]:v};
+    setS(p=>({...p,subjects:subs,_updatedAt:new Date().toISOString()}));
+  };
+  const addSub = ()=>setS(p=>({...p,subjects:[...p.subjects,{name:"",mm1:50,obt1:"",mm2:50,obt2:"",mm3:50,obt3:""}]}));
+  const removeSub = (i)=>setS(p=>({...p,subjects:p.subjects.filter((_,idx)=>idx!==i)}));
+
+  const handlePhoto = (e)=>{
+    const file=e.target.files[0]; if(!file) return;
+    if(file.size > 500000){ toast("⚠️ Photo too large! Use image under 500KB"); return; }
+    const reader=new FileReader();
+    reader.onload=ev=>setS(p=>({...p,photo:ev.target.result}));
+    reader.readAsDataURL(file);
+  };
+
+  const loadBackups = async ()=>{
+    const bk = await fbLoadBackups(s.id);
+    setBackups(bk);
+    setShowBackups(true);
+  };
+
+  const gt=calcGT(s.subjects);
+  const overallPct=gt.mmG>0?calcPct(gt.obtG,gt.mmG):null;
+  const pass=overallPct!==null&&overallPct>=33;
+
+  return (
+    <div className="fade-in" style={{paddingBottom:120}}>
+      {/* Top bar */}
+      <div style={{background:'linear-gradient(135deg,#1a237e,#283593)',padding:'12px 14px',display:'flex',alignItems:'center',gap:10,position:'sticky',top:0,zIndex:50}}>
+        <button onClick={onBack} style={{background:'rgba(255,255,255,0.15)',border:'none',borderRadius:8,padding:'7px 11px',color:'white',cursor:'pointer',display:'flex',alignItems:'center'}}>
+          {Ic.back}
+        </button>
+        <div style={{flex:1}}>
+          <div style={{color:'white',fontWeight:700,fontSize:14,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name||"New Student"}</div>
+          <div style={{color:'#90caf9',fontSize:11}}>{s.cls?`Class ${s.cls}${s.section?'-'+s.section:''}`:''} {s.session}</div>
+        </div>
+        <button onClick={loadBackups} style={{background:'rgba(255,255,255,0.12)',border:'none',borderRadius:8,padding:'7px 10px',color:'white',cursor:'pointer',display:'flex',alignItems:'center',gap:4,fontSize:11}} title="View backup versions">
+          {Ic.history}
+        </button>
+        <button onClick={()=>{ onSave(s); onPreview(s); }} style={{background:'#c62828',border:'none',borderRadius:8,padding:'8px 14px',color:'white',fontWeight:700,cursor:'pointer',fontFamily:'DM Sans',fontSize:12,display:'flex',alignItems:'center',gap:5}}>
+          {Ic.print} Print
+        </button>
+      </div>
+
+      {/* Auto-save indicator */}
+      <div style={{background:'#fffde7',borderBottom:'1px solid #fff9c4',padding:'4px 14px',fontSize:11,color:'#f57f17',display:'flex',alignItems:'center',gap:5}}>
+        <span>⚡</span> Auto-saving to Firebase...
+      </div>
+
+      <div style={{padding:14,display:'flex',flexDirection:'column',gap:14}}>
+
+        {/* Live Score */}
+        {overallPct!==null&&(
+          <div style={{background:pass?'linear-gradient(135deg,#e8f5e9,#f1f8e9)':'linear-gradient(135deg,#ffebee,#fff3e0)',border:`1.5px solid ${pass?'#a5d6a7':'#ef9a9a'}`,borderRadius:14,padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:11,color:'#666'}}>Overall Score</div>
+              <div style={{fontSize:22,fontWeight:800,color:pass?'#2e7d32':'#c62828'}}>{gt.obtG} / {gt.mmG}</div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:28,fontWeight:900,color:pass?'#1b5e20':'#b71c1c'}}>{overallPct}%</div>
+              <div style={{background:pass?'#2e7d32':'#c62828',color:'white',padding:'2px 12px',borderRadius:20,fontSize:12,fontWeight:700,display:'inline-block'}}>{getGrade(overallPct)} – {getGradeLabel(overallPct)}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Backup versions modal */}
+        {showBackups&&(
+          <div className="glass-card" style={{padding:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <b style={{fontSize:13}}>📂 Backup Versions (Last 2)</b>
+              <button onClick={()=>setShowBackups(false)} style={{background:'none',border:'none',cursor:'pointer',fontSize:18,color:'#888'}}>✕</button>
+            </div>
+            {backups.length===0?<div style={{color:'#aaa',fontSize:13}}>No backups yet</div>:
+              backups.map((b,i)=>(
+                <div key={i} style={{border:'1px solid #e0e0e0',borderRadius:10,padding:'10px 12px',marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>{i===0?'🕐 Latest Backup':'🕑 Previous Backup'}</div>
+                    <div style={{fontSize:11,color:'#888'}}>{b._savedAt?new Date(b._savedAt).toLocaleString('en-IN'):''}</div>
+                  </div>
+                  <button onClick={()=>{ setS(b); setShowBackups(false); toast("✅ Restored from backup!"); }} style={{background:'#1a237e',color:'white',border:'none',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:600,cursor:'pointer'}}>Restore</button>
+                </div>
+              ))
+            }
+          </div>
+        )}
+
+        {/* Student Info */}
+        <div className="glass-card" style={{padding:14}}>
+          <div style={{fontWeight:700,color:'#333',marginBottom:12,fontSize:13}}>👤 Student Information</div>
+          <div style={{display:'flex',gap:12,marginBottom:12}}>
+            {/* Photo */}
+            <div onClick={()=>photoRef.current.click()} style={{width:80,height:96,border:'2px dashed #9fa8da',borderRadius:10,cursor:'pointer',overflow:'hidden',background:'#f5f5f5',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              {s.photo?<img src={s.photo} style={{width:'100%',height:'100%',objectFit:'cover'}}/>:<div style={{textAlign:'center',fontSize:11,color:'#aaa',padding:6}}>{Ic.upload}<br/>Photo<br/><span style={{fontSize:9}}>Max 500KB</span></div>}
+            </div>
+            <input ref={photoRef} type="file" accept="image/*" style={{display:'none'}} onChange={handlePhoto}/>
+            <div style={{flex:1,display:'flex',flexDirection:'column',gap:8}}>
+              <input className="inp" placeholder="Student Full Name *" value={s.name} onChange={e=>upd('name',e.target.value)} />
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                <input className="inp" placeholder="Class (e.g. 5)" value={s.cls} onChange={e=>upd('cls',e.target.value)} />
+                <input className="inp" placeholder="Section (A/B)" value={s.section} onChange={e=>upd('section',e.target.value)} />
+              </div>
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            <input className="inp" placeholder="Father's Name" value={s.father} onChange={e=>upd('father',e.target.value)} />
+            <input className="inp" placeholder="Mother's Name" value={s.mother} onChange={e=>upd('mother',e.target.value)} />
+            <input className="inp" placeholder="Roll No." value={s.roll} onChange={e=>upd('roll',e.target.value)} />
+            <input className="inp" placeholder="Admission No." value={s.admission} onChange={e=>upd('admission',e.target.value)} />
+            <input className="inp" type="date" value={s.dob} onChange={e=>upd('dob',e.target.value)} />
+            <input className="inp" placeholder="Session 2025-26" value={s.session} onChange={e=>upd('session',e.target.value)} />
+            <input className="inp" placeholder="Address" value={s.address} onChange={e=>upd('address',e.target.value)} style={{gridColumn:'span 2'}} />
+          </div>
+        </div>
+
+        {/* Attendance */}
+        <div className="glass-card" style={{padding:14}}>
+          <div style={{fontWeight:700,color:'#333',marginBottom:10,fontSize:13}}>📅 Attendance</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            <div>
+              <label style={{fontSize:11,color:'#888'}}>Days Present</label>
+              <input className="inp" type="number" placeholder="e.g. 210" value={s.attendance.present} onChange={e=>setS(p=>({...p,attendance:{...p.attendance,present:e.target.value}}))} />
+            </div>
+            <div>
+              <label style={{fontSize:11,color:'#888'}}>Total Working Days</label>
+              <input className="inp" type="number" placeholder="e.g. 240" value={s.attendance.total} onChange={e=>setS(p=>({...p,attendance:{...p.attendance,total:e.target.value}}))} />
+            </div>
+          </div>
+          {s.attendance.present&&s.attendance.total&&(
+            <div style={{marginTop:6,fontSize:12,color:'#2e7d32',fontWeight:600}}>
+              📊 Attendance: {((s.attendance.present/s.attendance.total)*100).toFixed(0)}%
+            </div>
+          )}
+        </div>
+
+        {/* Marks Table */}
+        <div className="glass-card" style={{padding:14}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <div style={{fontWeight:700,color:'#333',fontSize:13}}>📊 Marks Entry – 3 Terms</div>
+            <button onClick={addSub} style={{background:'#e3f2fd',color:'#1565c0',border:'none',borderRadius:8,padding:'5px 12px',fontSize:12,fontWeight:600,cursor:'pointer'}}>+ Add</button>
+          </div>
+          <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:11,minWidth:520}}>
+              <thead>
+                <tr style={{background:'#e8eaf6'}}>
+                  <th style={{padding:'6px 5px',textAlign:'left',minWidth:85,fontSize:11}}>Subject</th>
+                  <th colSpan="2" style={{padding:'5px',color:'#1a237e',fontSize:10}}>Term 1</th>
+                  <th colSpan="2" style={{padding:'5px',color:'#1a237e',fontSize:10}}>Term 2</th>
+                  <th colSpan="2" style={{padding:'5px',color:'#1a237e',fontSize:10}}>Term 3</th>
+                  <th style={{padding:'5px',color:'#c62828',fontSize:10}}>Total</th>
+                  <th style={{padding:'5px',color:'#2e7d32',fontSize:10}}>%</th>
+                  <th style={{padding:'5px',color:'#6a1b9a',fontSize:10}}>Grade</th>
+                  <th style={{width:24}}></th>
+                </tr>
+                <tr style={{background:'#f3f4ff',fontSize:10}}>
+                  <th></th>
+                  <th style={{padding:'3px',color:'#888',fontWeight:500}}>MM</th><th style={{padding:'3px',color:'#444'}}>Obt</th>
+                  <th style={{padding:'3px',color:'#888',fontWeight:500}}>MM</th><th style={{padding:'3px',color:'#444'}}>Obt</th>
+                  <th style={{padding:'3px',color:'#888',fontWeight:500}}>MM</th><th style={{padding:'3px',color:'#444'}}>Obt</th>
+                  <th></th><th></th><th></th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.subjects.map((sub,i)=>{
+                  const tot=calcSubTotal(sub), mm=calcSubMM(sub);
+                  const pct=mm>0?calcPct(tot,mm):null;
+                  const pass=pct!==null&&pct>=33;
+                  return (
+                    <tr key={i} style={{borderBottom:'1px solid #eee',background:i%2===0?'#fafafa':'white'}}>
+                      <td style={{padding:'3px'}}><input className="marks-inp" style={{textAlign:'left',fontWeight:600}} value={sub.name} onChange={e=>updSub(i,'name',e.target.value)} placeholder="Subject"/></td>
+                      <td style={{padding:'2px'}}><input className="marks-inp" style={{width:34,background:'#e3f2fd'}} value={sub.mm1} onChange={e=>updSub(i,'mm1',e.target.value)}/></td>
+                      <td style={{padding:'2px'}}><input className="marks-inp" style={{width:34}} value={sub.obt1} onChange={e=>updSub(i,'obt1',e.target.value)}/></td>
+                      <td style={{padding:'2px'}}><input className="marks-inp" style={{width:34,background:'#e3f2fd'}} value={sub.mm2} onChange={e=>updSub(i,'mm2',e.target.value)}/></td>
+                      <td style={{padding:'2px'}}><input className="marks-inp" style={{width:34}} value={sub.obt2} onChange={e=>updSub(i,'obt2',e.target.value)}/></td>
+                      <td style={{padding:'2px'}}><input className="marks-inp" style={{width:34,background:'#e3f2fd'}} value={sub.mm3} onChange={e=>updSub(i,'mm3',e.target.value)}/></td>
+                      <td style={{padding:'2px'}}><input className="marks-inp" style={{width:34}} value={sub.obt3} onChange={e=>updSub(i,'obt3',e.target.value)}/></td>
+                      <td style={{padding:'3px 5px',fontWeight:700,color:'#c62828',textAlign:'center'}}>{mm>0?tot:''}</td>
+                      <td style={{padding:'3px 5px',textAlign:'center',fontWeight:600,color:pass?'#2e7d32':'#c62828'}}>{pct!==null?pct+'%':''}</td>
+                      <td style={{padding:'3px 5px',textAlign:'center'}}>
+                        {pct!==null&&<span style={{background:pass?'#e8f5e9':'#ffebee',color:pass?'#2e7d32':'#c62828',padding:'1px 6px',borderRadius:10,fontSize:11,fontWeight:700}}>{getGrade(pct)}</span>}
+                      </td>
+                      <td style={{padding:'2px'}}><button onClick={()=>removeSub(i)} style={{background:'none',border:'none',cursor:'pointer',color:'#e57373',padding:2}}>{Ic.trash}</button></td>
+                    </tr>
+                  );
+                })}
+                {/* Grand Total */}
+                <tr style={{background:'#e8eaf6',fontWeight:800,fontSize:12}}>
+                  <td style={{padding:'6px 5px'}}>TOTAL</td>
+                  <td style={{textAlign:'center',color:'#666'}}>{gt.mm1}</td><td style={{textAlign:'center'}}>{gt.obt1||0}</td>
+                  <td style={{textAlign:'center',color:'#666'}}>{gt.mm2}</td><td style={{textAlign:'center'}}>{gt.obt2||0}</td>
+                  <td style={{textAlign:'center',color:'#666'}}>{gt.mm3}</td><td style={{textAlign:'center'}}>{gt.obt3||0}</td>
+                  <td style={{textAlign:'center',color:'#c62828'}}>{gt.obtG}/{gt.mmG}</td>
+                  <td style={{textAlign:'center',color:pass?'#2e7d32':'#c62828'}}>{overallPct}%</td>
+                  <td style={{textAlign:'center'}}><span style={{background:'#1a237e',color:'white',padding:'1px 7px',borderRadius:10,fontSize:11}}>{overallPct!==null?getGrade(overallPct):''}</span></td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Co-Scholastic */}
+        <div className="glass-card" style={{padding:14}}>
+          <div style={{fontWeight:700,color:'#333',marginBottom:10,fontSize:13}}>🎨 Co-Scholastic (A+/A/B+/B/C)</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {[['sports','⚽ Sports'],['art','🎨 Art & Craft'],['music','🎵 Music & Dance'],['discipline','📐 Discipline'],['cleanliness','✨ Cleanliness']].map(([k,lbl])=>(
+              <div key={k}>
+                <label style={{fontSize:11,color:'#888'}}>{lbl}</label>
+                <select className="inp" value={s.coScholastic[k]} onChange={e=>setS(p=>({...p,coScholastic:{...p.coScholastic,[k]:e.target.value}}))}>
+                  <option value="">– Select –</option>
+                  {['A+','A','B+','B','C'].map(g=><option key={g} value={g}>{g}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Remarks */}
+        <div className="glass-card" style={{padding:14}}>
+          <div style={{fontWeight:700,color:'#333',marginBottom:10,fontSize:13}}>✏️ Result & Remarks</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+            <div>
+              <label style={{fontSize:11,color:'#888'}}>Class Rank</label>
+              <input className="inp" placeholder="e.g. 3" value={s.rank||''} onChange={e=>upd('rank',e.target.value)} />
+            </div>
+            <div>
+              <label style={{fontSize:11,color:'#888'}}>Result</label>
+              <select className="inp" value={s.result||''} onChange={e=>upd('result',e.target.value)}>
+                <option value="">Auto ({overallPct!==null?(overallPct>=33?'PASS':'FAIL'):'...'})</option>
+                <option value="PASS">PASS</option>
+                <option value="FAIL">FAIL</option>
+                <option value="PROMOTED">PROMOTED</option>
+              </select>
+            </div>
+          </div>
+          <textarea className="inp" rows="2" placeholder="Teacher's remarks..." value={s.remarks} onChange={e=>upd('remarks',e.target.value)} style={{resize:'none'}} />
+        </div>
+
+        {/* Delete */}
+        <button onClick={onDelete} style={{width:'100%',padding:12,background:'#fff5f5',color:'#c62828',border:'1.5px solid #ffcdd2',borderRadius:12,fontWeight:600,cursor:'pointer',fontFamily:'DM Sans',fontSize:13}}>
+          🗑️ Delete This Student
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ==================== MARKSHEET PRINT ====================
+function MarksheetPrint({ student:s, onClose }){
+  const gt=calcGT(s.subjects);
+  const overallPct=gt.mmG>0?calcPct(gt.obtG,gt.mmG):null;
+  const result=s.result||(overallPct!==null?(overallPct>=33?"PASS":"FAIL"):"");
+  const attPct=s.attendance.present&&s.attendance.total
+    ?((s.attendance.present/s.attendance.total)*100).toFixed(0)+"%"
+    :(s.attendance.present?s.attendance.present+" days":"");
+
+  return (
+    <div className="fade-in">
+      {/* Controls */}
+      <div className="no-print" style={{background:'#1a237e',padding:'12px 14px',display:'flex',alignItems:'center',gap:10,position:'sticky',top:0,zIndex:50}}>
+        <button onClick={onClose} style={{background:'rgba(255,255,255,0.15)',border:'none',borderRadius:8,padding:'7px 12px',color:'white',cursor:'pointer',display:'flex',alignItems:'center',gap:5,fontFamily:'DM Sans'}}>
+          {Ic.back} Back
+        </button>
+        <div style={{flex:1,color:'white',fontWeight:600,fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name} – Marksheet</div>
+        <button onClick={()=>window.print()} style={{background:'#c62828',border:'none',borderRadius:8,padding:'8px 16px',color:'white',fontWeight:700,cursor:'pointer',fontFamily:'DM Sans',display:'flex',alignItems:'center',gap:6,fontSize:13}}>
+          {Ic.print} Print / PDF
+        </button>
+      </div>
+      <div className="no-print" style={{background:'#fff8e1',padding:'8px 14px',fontSize:12,color:'#e65100',textAlign:'center'}}>
+        💡 Print karo ya PDF save karo — Chrome mein "Save as PDF" select karo
+      </div>
+
+      {/* ACTUAL A4 MARKSHEET */}
+      <div id="PRINT_AREA" style={{width:'210mm',minHeight:'297mm',background:'white',margin:'0 auto',padding:'6mm',boxSizing:'border-box',fontFamily:'Arial,sans-serif'}}>
+        <div style={{border:'3px solid #c62828',padding:'3px',minHeight:'283mm',display:'flex',flexDirection:'column'}}>
+          <div style={{border:'1px solid #000',padding:'6px',flex:1,display:'flex',flexDirection:'column'}}>
+
+            {/* HEADER */}
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6,minHeight:130}}>
+              <div style={{width:90,height:90,border:'1px solid #ccc',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'#aaa',textAlign:'center',flexShrink:0,padding:4}}>SCHOOL<br/>LOGO</div>
+              <div style={{flex:1,textAlign:'center',padding:'0 8px'}}>
+                <div style={{fontSize:26,fontWeight:900,color:'#c62828',fontFamily:'"Times New Roman",serif',textTransform:'uppercase',letterSpacing:1,lineHeight:1.1}}>SBS SHIKSHA NIKETAN</div>
+                <div style={{fontSize:11,fontWeight:700,color:'#222',marginTop:3}}>Karaspur Prithvipur, Ghazipur (U.P.)</div>
+                <div style={{display:'inline-block',background:'#ffff00',color:'#c62828',padding:'3px 14px',fontWeight:900,fontSize:13,borderBottom:'2px solid #c62828',textDecoration:'underline',marginTop:6,marginBottom:4}}>PROGRESS EVALUATION REPORT</div>
+                <div style={{fontSize:11,fontWeight:700,color:'#1a237e',marginTop:4}}>ACADEMIC SESSION: <span style={{color:'#000'}}>{s.session}</span> &nbsp;&nbsp; CLASS: <span style={{color:'#000',fontFamily:'"Times New Roman",serif',fontWeight:900,fontSize:13}}>{s.cls}{s.section?'-'+s.section:''}</span></div>
+              </div>
+              <div style={{width:80,height:96,border:'1px solid #000',flexShrink:0,overflow:'hidden',background:'#f5f5f5',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                {s.photo?<img src={s.photo} style={{width:'100%',height:'100%',objectFit:'cover'}}/>:<span style={{fontSize:10,color:'#aaa',textAlign:'center'}}>Photo</span>}
+              </div>
+            </div>
+
+            {/* STUDENT INFO */}
+            <div style={{background:'#d1eeee',borderTop:'2px solid #000',borderBottom:'2px solid #000',padding:'5px 8px',marginBottom:6,display:'flex',justifyContent:'space-between',minHeight:88,fontFamily:'"Times New Roman",serif'}}>
+              <div style={{display:'flex',flexDirection:'column',justifyContent:'space-evenly',fontSize:11,fontWeight:700,width:'60%'}}>
+                <div><span style={{display:'inline-block',width:128}}>STUDENT'S NAME</span> : <span style={{textTransform:'uppercase'}}>{s.name}</span></div>
+                <div><span style={{display:'inline-block',width:128}}>MOTHER'S NAME</span> : <span style={{textTransform:'uppercase'}}>{s.mother}</span></div>
+                <div><span style={{display:'inline-block',width:128}}>FATHER'S NAME</span> : <span style={{textTransform:'uppercase'}}>{s.father}</span></div>
+                <div><span style={{display:'inline-block',width:128}}>ADDRESS</span> : <span style={{textTransform:'uppercase'}}>{s.address}</span></div>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',justifyContent:'space-evenly',fontSize:11,fontWeight:700,textAlign:'right',width:'38%'}}>
+                <div>ROLL NO : <b>{s.roll}</b></div>
+                <div>ADMISSION NO : <b>{s.admission}</b></div>
+                <div>DATE OF BIRTH : {s.dob}</div>
+              </div>
+            </div>
+
+            {/* MARKS TABLE */}
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:10,marginBottom:5}}>
+              <thead>
+                <tr style={{background:'#fce4d6',height:32}}>
+                  <th rowSpan="2" style={{border:'1px solid #000',textAlign:'left',paddingLeft:5,fontWeight:800,fontSize:11,width:'20%'}}>SUBJECTS</th>
+                  <th colSpan="2" style={{border:'1px solid #000',color:'#1a237e',fontWeight:700,fontSize:10}}>FIRST TERM EXAM</th>
+                  <th colSpan="2" style={{border:'1px solid #000',color:'#1a237e',fontWeight:700,fontSize:10}}>SECOND TERM EXAM</th>
+                  <th colSpan="2" style={{border:'1px solid #000',color:'#1a237e',fontWeight:700,fontSize:10}}>THIRD TERM EXAM</th>
+                  <th colSpan="2" style={{border:'1px solid #000',color:'#1a237e',fontWeight:700,fontSize:10}}>GRAND TOTAL</th>
+                  <th rowSpan="2" style={{border:'1px solid #000',fontWeight:700,fontSize:10,width:'6%'}}>GRADE</th>
+                </tr>
+                <tr style={{background:'#fce4d6',height:24}}>
+                  {['MM','MARKS OBT','MM','MARKS OBT','MM','MARKS OBT','MM','TOTAL'].map((h,i)=>(
+                    <th key={i} style={{border:'1px solid #000',color:i%2===0?'#0070c0':'#333',fontWeight:700,fontSize:9,padding:'2px 1px'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {s.subjects.map((sub,i)=>{
+                  const tot=calcSubTotal(sub),mm=calcSubMM(sub);
+                  const pct=mm>0?calcPct(tot,mm):null;
+                  return (
+                    <tr key={i} style={{height:26,background:i%2===0?'white':'#fafafa'}}>
+                      <td style={{border:'1px solid #000',paddingLeft:5,fontWeight:700,textTransform:'uppercase',fontSize:10}}>{sub.name}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',color:'#0070c0',fontWeight:700}}>{sub.mm1}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',fontWeight:600}}>{sub.obt1}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',color:'#0070c0',fontWeight:700}}>{sub.mm2}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',fontWeight:600}}>{sub.obt2}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',color:'#0070c0',fontWeight:700}}>{sub.mm3}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',fontWeight:600}}>{sub.obt3}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',color:'#0070c0',fontWeight:700}}>{mm>0?mm:''}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',fontWeight:800}}>{mm>0?tot:''}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',fontWeight:900,fontSize:11,color:pct!==null&&pct<33?'#c62828':'#1a237e'}}>{pct!==null?getGrade(pct):''}</td>
+                    </tr>
+                  );
+                })}
+                {[...Array(Math.max(0,10-s.subjects.length))].map((_,i)=>(
+                  <tr key={'p'+i} style={{height:26}}>{[...Array(10)].map((_,j)=><td key={j} style={{border:'1px solid #000'}}></td>)}</tr>
+                ))}
+                <tr style={{background:'#f2f2f2',fontWeight:800,height:28}}>
+                  <td style={{border:'1px solid #000',paddingLeft:5}}>TOTAL</td>
+                  <td style={{border:'1px solid #000',textAlign:'center',color:'#0070c0'}}>{gt.mm1}</td>
+                  <td style={{border:'1px solid #000',textAlign:'center'}}>{gt.obt1||0}</td>
+                  <td style={{border:'1px solid #000',textAlign:'center',color:'#0070c0'}}>{gt.mm2}</td>
+                  <td style={{border:'1px solid #000',textAlign:'center'}}>{gt.obt2||0}</td>
+                  <td style={{border:'1px solid #000',textAlign:'center',color:'#0070c0'}}>{gt.mm3}</td>
+                  <td style={{border:'1px solid #000',textAlign:'center'}}>{gt.obt3||0}</td>
+                  <td style={{border:'1px solid #000',textAlign:'center',color:'#0070c0'}}>{gt.mmG}</td>
+                  <td style={{border:'1px solid #000',textAlign:'center'}}>{gt.obtG}</td>
+                  <td style={{border:'1px solid #000'}}></td>
+                </tr>
+                <tr style={{background:'#f2f2f2',fontWeight:800,height:28}}>
+                  <td style={{border:'1px solid #000',paddingLeft:5}}>PERCENTAGE</td>
+                  <td colSpan="2" style={{border:'1px solid #000',textAlign:'center'}}>{gt.mm1>0?((gt.obt1/gt.mm1)*100).toFixed(0)+'%':''}</td>
+                  <td colSpan="2" style={{border:'1px solid #000',textAlign:'center'}}>{gt.mm2>0?((gt.obt2/gt.mm2)*100).toFixed(0)+'%':''}</td>
+                  <td colSpan="2" style={{border:'1px solid #000',textAlign:'center'}}>{gt.mm3>0?((gt.obt3/gt.mm3)*100).toFixed(0)+'%':''}</td>
+                  <td colSpan="2" style={{border:'1px solid #000',textAlign:'center',fontSize:14,fontWeight:900}}>{overallPct}%</td>
+                  <td style={{border:'1px solid #000',textAlign:'center',fontWeight:900,fontSize:12,color:'#1a237e'}}>{getGrade(overallPct)}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            {/* CO-SCHOLASTIC */}
+            <div style={{background:'#fce4d6',fontWeight:700,fontSize:10,padding:'4px 6px',border:'1px solid #000',display:'flex',justifyContent:'space-between',marginBottom:3}}>
+              <span>Co-Scholastic Area</span>
+              <span>A+: OUTSTANDING &nbsp; A: EXCELLENT &nbsp; B+: VERY GOOD &nbsp; B: GOOD &nbsp; C: AVERAGE</span>
+            </div>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:10,marginBottom:4}}>
+              <tbody>
+                <tr style={{height:24}}>
+                  {[['Sports & Games','sports'],['Art & Craft','art'],['Music & Dance','music'],['Discipline','discipline'],['Cleanliness','cleanliness']].map(([lbl,k])=>(
+                    <React.Fragment key={k}>
+                      <td style={{border:'1px solid #000',padding:'2px 5px',fontWeight:700,background:'#fafafa'}}>{lbl}</td>
+                      <td style={{border:'1px solid #000',textAlign:'center',fontWeight:900,color:'#1a237e',width:'4%'}}>{s.coScholastic[k]||''}</td>
+                    </React.Fragment>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+
+            {/* GRADE SCALE */}
+            <div style={{display:'flex',border:'1px solid #000',marginBottom:7,height:28,fontSize:9}}>
+              <div style={{background:'#595959',color:'white',fontWeight:700,width:'14%',display:'flex',alignItems:'center',justifyContent:'center',textAlign:'center',padding:'0 3px',lineHeight:1.2}}>MARK RANGE: GRADE</div>
+              <div style={{flex:1,display:'flex'}}>
+                {GRADE_SCALE.map((g,i)=>(
+                  <div key={i} style={{flex:1,background:'#dbe5f1',borderLeft:'1px solid white',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:600}}>
+                    {g.min===0?'00':g.min}-{g.max}:{g.grade}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* RESULT + FOOTER */}
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:11,fontWeight:700,marginBottom:8,padding:'0 4px',gap:8,flexWrap:'wrap'}}>
+              <div style={{flex:1}}>Remark: <span style={{borderBottom:'1px solid #000',display:'inline-block',minWidth:80}}>{s.remarks}</span></div>
+              <div>Rank: <span style={{borderBottom:'1px solid #000',display:'inline-block',minWidth:36,textAlign:'center'}}>{s.rank||''}</span></div>
+              <div>Attendance: <span style={{borderBottom:'1px solid #000',display:'inline-block',minWidth:56}}>{attPct}</span></div>
+              <div style={{background:result==='PASS'?'#e8f5e9':'#ffebee',border:`1.5px solid ${result==='PASS'?'#2e7d32':'#c62828'}`,padding:'3px 12px',borderRadius:4,color:result==='PASS'?'#2e7d32':'#c62828',fontWeight:900,fontSize:13}}>
+                RESULT: {result}
+              </div>
+            </div>
+
+            <div style={{display:'flex',justifyContent:'space-between',marginTop:'auto',paddingBottom:6,fontSize:11,fontWeight:700,padding:'16px 20px 6px'}}>
+              {['Date','Class Teacher','Principal'].map(lbl=>(
+                <div key={lbl} style={{textAlign:'center'}}>
+                  <div style={{borderTop:'2px dotted #000',width:120,marginBottom:3}}></div>{lbl}
+                </div>
+              ))}
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== MAIN APP ====================
+function App(){
+  const [screen, setScreen] = useState('dashboard');
+  const [students, setStudents] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [printStudent, setPrintStudent] = useState(null);
+  const [toastMsg, setToastMsg] = useState('');
+  const [syncStatus, setSyncStatus] = useState('idle');
+  const [lastSync, setLastSync] = useState('');
+  const [loaded, setLoaded] = useState(false);
+
+  const showToast = (msg) => { setToastMsg(msg); setTimeout(()=>setToastMsg(''),2500); };
+
+  // Load from Firebase on start
+  useEffect(()=>{
+    setSyncStatus('syncing');
+    fbLoadAllStudents()
+      .then(data => {
+        if(data.length>0) setStudents(data);
+        else {
+          const local=lsLoad();
+          if(local.length>0) setStudents(local);
+        }
+        setSyncStatus('synced');
+        setLastSync(new Date().toLocaleTimeString('en-IN'));
+        setLoaded(true);
+      })
+      .catch(()=>{
+        const local=lsLoad();
+        setStudents(local);
+        setSyncStatus('offline');
+        setLoaded(true);
+        showToast('📴 Offline – loaded from local storage');
+      });
+  },[]);
+
+  // Save to localStorage whenever students change
+  useEffect(()=>{ if(loaded) lsSave(students); },[students,loaded]);
+
+  const handleSave = async (updated) => {
+    const next = students.map(s=>s.id===updated.id?updated:s);
+    setStudents(next);
+    lsSave(next);
+    setSyncStatus('syncing');
+    try {
+      await fbSaveStudent(updated);
+      setSyncStatus('synced');
+      setLastSync(new Date().toLocaleTimeString('en-IN'));
+    } catch {
+      setSyncStatus('error');
+      showToast('⚠️ Saved locally, sync failed');
+    }
+  };
+
+  const handleNew = async () => {
+    const s=newStudent();
+    const next=[...students,s];
+    setStudents(next);
+    setActiveId(s.id);
+    setScreen('editor');
+    try { await fbSaveStudent(s); } catch {}
+  };
+
+  const handleDelete = async () => {
+    if(!window.confirm("Delete this student permanently from Firebase too?")) return;
+    const next=students.filter(s=>s.id!==activeId);
+    setStudents(next);
+    lsSave(next);
+    try { await fbDeleteStudent(activeId); } catch {}
+    setScreen('dashboard');
+    showToast('🗑️ Student deleted');
+  };
+
+  const activeStudent = students.find(s=>s.id===activeId);
+
+  if(!loaded) return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16,background:'#f0f2f5'}}>
+      <div style={{fontSize:40}}>🏫</div>
+      <div style={{fontWeight:700,color:'#1a237e',fontSize:18}}>SBS Shiksha Niketan</div>
+      <div style={{color:'#888',fontSize:13,display:'flex',alignItems:'center',gap:8}}>
+        <span className="sync-dot syncing" style={{background:'#ff9800'}}></span> Loading from Firebase...
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{maxWidth:900,margin:'0 auto',minHeight:'100vh',background:'#f0f2f5'}}>
+      {screen==='dashboard'&&<Dashboard students={students} onNew={handleNew} onSelect={id=>{setActiveId(id);setScreen('editor');}} syncStatus={syncStatus} lastSync={lastSync}/>}
+      {screen==='editor'&&activeStudent&&<StudentEditor student={activeStudent} onSave={handleSave} onBack={()=>setScreen('dashboard')} onPreview={s=>{setPrintStudent(s);setScreen('print');}} onDelete={handleDelete} toast={showToast}/>}
+      {screen==='print'&&printStudent&&<MarksheetPrint student={printStudent} onClose={()=>setScreen('editor')}/>}
+      <Toast msg={toastMsg}/>
+    </div>
+  );
+}
+
+const root=ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+
+<script>
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('sw.js')
+      .then(()=>console.log('✅ SW Registered'))
+      .catch(e=>console.log('SW Error:',e));
+  });
+}
+</script>
+</body>
+</html>
